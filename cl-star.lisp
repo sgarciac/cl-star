@@ -167,6 +167,9 @@ The metadata must be a DRISL encoded map holding the required \"$type\" key.
 This must be called exactly once, before any pair."
   (require-state writer :new)
   (check-octets octets :meta)
+  (when (zerop (length octets))
+    (error 'star-format-error
+           :format-control "The metadata must not be empty."))
   (when (> (length octets) (max-meta-size writer))
       (error 'star-size-limit-error :what :meta :limit (max-meta-size writer)))
   (guarding-io (writer)
@@ -202,15 +205,11 @@ Empty keys and values are allowed, as are duplicate keys."
 
 (defun finish-star-writer (writer &key abort)
   "Terminates the archive: writes the end marker and flushes the stream.
-The underlying stream is not closed. When ABORT is true the archive is
-discarded instead: no end marker is written, which is the only way out of
-the :failed state."
+The underlying stream is not closed. Calling it again on a closed writer does
+nothing. When ABORT is true the archive is discarded instead: no end marker
+is written, which is the only way out of the :failed state."
   (ecase (writer-state writer)
-    (:closed
-     (unless abort
-       (error 'star-state-error
-              :format-control "Cannot finish a writer that is already closed."))
-     nil)
+    (:closed nil)
     (:new
      (unless abort
        (error 'star-state-error
@@ -236,18 +235,27 @@ the :failed state."
    ;; :new -(read metadata)-> :meta -(read pairs)-> :pairs -(end)-> :closed
    (state :initform :new :accessor reader-state)
 
+   ;; Optional validator for the metadata: a function of one argument (the
+   ;; metadata octets) that signals an error when the metadata is not valid.
+   (meta-validator :initarg :meta-validator :initform nil :accessor meta-validator)
+
    (max-key-size :initarg :max-key-size   :initform +default-max-key-size+   :accessor max-key-size)
    (max-value-size :initarg :max-value-size :initform +default-max-value-size+ :accessor max-value-size)
    (max-meta-size :initarg :max-meta-size  :initform +default-max-meta-size+  :accessor max-meta-size))
 
   (:documentation "Decoder for one STAR archive read from a binary input stream."))
 
-(defun make-star-reader (stream &key max-key-size max-value-size max-meta-size)
-  "Creates a new star-reader, initialized in the :new state."
+(defun make-star-reader (stream &key max-key-size max-value-size max-meta-size
+                                       meta-validator)
+  "Creates a new star-reader, initialized in the :new state.
+META-VALIDATOR is an optional function of one argument (the metadata octets)
+that signals an error when the metadata is not valid. It is called after the
+metadata has been read."
   (apply #'make-instance 'star-reader :stream stream
          (append (when max-key-size   (list :max-key-size max-key-size))
                  (when max-value-size (list :max-value-size max-value-size))
-                 (when max-meta-size  (list :max-meta-size max-meta-size)))))
+                 (when max-meta-size  (list :max-meta-size max-meta-size))
+                 (when meta-validator (list :meta-validator meta-validator)))))
 
 (defun require-reader-state (reader &rest allowed)
   "Signals a STAR-STATE-ERROR unless READER is in one of the ALLOWED states."
@@ -284,13 +292,19 @@ limits of READER. WHAT is a keyword describing the contents (:key, :value)."
 
 (defun read-star-meta (reader)
   "Reads the magic number and the metadata of an archive.
-Returns the metadata as a vector of octets."
+Returns the metadata as a vector of octets. When the reader has a metadata
+validator it is called with the metadata octets."
   (require-reader-state reader :new)
   (read-magic (reader-stream reader))
   (let ((length (read-varint (reader-stream reader))))
+    (when (zerop length)
+      (error 'star-format-error
+             :format-control "The metadata must not be empty."))
     (when (> length (max-meta-size reader))
       (error 'star-size-limit-error :what :meta :limit (max-meta-size reader)))
     (let ((meta (read-octets (reader-stream reader) length)))
+      (when (meta-validator reader)
+        (funcall (meta-validator reader) meta))
       (setf (reader-state reader) :meta)
       meta)))
 
@@ -331,14 +345,18 @@ sits in the :closed state."
 (key . value) pairs."
   (%make-star-archive (check-octets meta :meta) pairs))
 
-(defun read-star (stream &key max-key-size max-value-size max-meta-size)
+(defun read-star (stream &key max-key-size max-value-size max-meta-size
+                          meta-validator)
   "Reads a whole STAR archive from STREAM, returning a STAR-ARCHIVE.
+META-VALIDATOR is an optional function of one argument (the metadata octets)
+that signals an error when the metadata is not valid; see MAKE-STAR-READER.
 Signals a STAR-FORMAT-ERROR when the archive is malformed and a
 STAR-TRUNCATED-ERROR when it ends prematurely."
   (let* ((reader (make-star-reader stream
                                     :max-key-size max-key-size
                                     :max-value-size max-value-size
-                                    :max-meta-size max-meta-size))
+                                    :max-meta-size max-meta-size
+                                    :meta-validator meta-validator))
          (meta (read-star-meta reader))
          (pairs '()))
     (loop

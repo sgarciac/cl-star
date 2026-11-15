@@ -18,9 +18,33 @@ and by atproto's public data exports.
 * the metadata is a DRISL encoded map whose only reserved key is `"$type"`
 * `0x01` introduces a data pair, `0x00` terminates the archive
 
-`cl-star` deals with the container only: metadata is handed over (and returned)
-as raw octets, so you are free to encode and decode it with any DRISL
-implementation (e.g. [cl-atproto-drisl](https://github.com/sergio/cl-atproto-drisl)).
+## Metadata
+
+The metadata is a DRISL encoded map whose only reserved key is `"$type"`, whose
+value must be a text string. `cl-star` handles the container only: the
+metadata is read and written as raw octets, so you are free to encode and
+decode it with any DRISL implementation (e.g.
+[cl-atproto-drisl](https://github.com/sgarciac/cl-atproto-drisl)).
+
+Two rules are enforced by the container itself:
+
+* the metadata must not be empty;
+* it must be written (and read) exactly once, before any pair.
+
+Validating the metadata is optional: hand a validator to the reader and it
+will be called with the metadata octets, and its error will abort the read.
+
+```lisp
+(defun drisl-validator (octets)
+  "Signals an error when OCTETS is not a canonical DRISL map with a $type."
+  (let ((meta (cl-atproto-drisl:drisl-deserialize-from-sequence octets)))
+    (unless (hash-table-p meta)
+      (error "the metadata is not a DRISL map"))
+    (unless (stringp (gethash "$type" meta))
+      (error "the metadata has no $type string"))))
+
+(cl-star:read-star stream :meta-validator #'drisl-validator)
+```
 
 ## Installation
 
@@ -133,6 +157,9 @@ When an archive is too big to be held in memory, use the reader directly:
 | `write-star` | writes a whole `star-archive` |
 | `star-archive` | `meta` and `pairs` accessors |
 
+Both `make-star-reader` and `read-star` accept a `:meta-validator` function,
+called with the metadata octets; see [Metadata](#metadata).
+
 Keys and values are vectors of `(unsigned-byte 8)`.
 
 ### Errors
@@ -151,16 +178,25 @@ All errors derive from `star-error`:
 Size limits can be configured per writer and per reader, they default to 8 KiB
 per key, 5 MiB per value and 5 MiB of metadata.
 
-## Tests
-
-```lisp
-(asdf:test-system :cl-star/tests)
-```
-
 ## Interop
 
-The upstream interop vectors live at
-<https://tangled.org/microcosm.blue/star/tree/interop/interop>. They target
+The test suite runs the test vectors of the reference implementation
+(<https://tangled.org/bnewbold.net/cobalt/tree/main/star/testdata>), which are
+the interop vectors of
+<https://tangled.org/microcosm.blue/star/tree/interop/interop> updated to the
+layout of the current specification. They are vendored in `tests/fixtures/`
+and used by `tests/interop.lisp`:
+
+* 18 valid archives: they must parse, and their pairs and metadata must match
+  the expectation;
+* 37 invalid archives: they must be rejected, 29 of them by the container
+  parser and 8 of them because of their metadata.
+
+The metadata of those archives is validated with `cl-atproto-drisl`, which the
+test system depends on weakly: when it is not installed, the metadata checks
+are skipped.
+
+The interop vectors of the `microcosm.blue/star` repository itself target
 STAR-lite **v1**, whose layout has no `0x01` pair marker and no `0x00` end
 marker:
 
@@ -168,22 +204,13 @@ marker:
 [ magic | len | meta ] [ len | key | len | val ] [ len | key | len | val ] ...
 ```
 
-while this library implements the current specification
-(<https://dasl.ing/star.html>):
+so they cannot be fed to a reader implementing the current spec.
 
+## Tests
+
+```lisp
+(asdf:test-system :cl-star/tests)
 ```
-[ magic | len | meta ] [ 1 | len | key | len | val ] * [ 0 ]
-```
-
-so the vectors cannot be fed to the reader as they are: every "valid" one
-would be rejected. The interesting cases they cover (multi byte varint
-prefixes, non minimal and over long varints, empty and NUL bytes in keys and
-values, non sorted key order, truncated archives, trailing bytes) are
-reproduced in the current layout in `tests.lisp`.
-
-The remaining upstream vectors are DRISL level (a map metadata with a `$type`
-string, canonical DRISL encoding); `cl-star` handles the container only and
-leaves the metadata as opaque octets.
 
 ## License
 

@@ -16,7 +16,14 @@
   :version "0.0.1"
   :serial t
   :depends-on (#:cl-star)
-  :components ((:file "tests"))
+  ;; the interop tests validate the metadata with cl-atproto-drisl, when it is
+  ;; available
+  :weakly-depends-on (#:cl-atproto-drisl)
+  :components ((:module "tests"
+                :serial t
+                :components ((:file "package")
+                             (:file "tests")
+                             (:file "interop"))))
   :perform (test-op (o c)
              (unless (uiop:symbol-call :cl-star/tests :run-tests)
                (error "cl-star tests failed."))))
