@@ -1,0 +1,13 @@
+# editor / tooling leftovers
+\#*\#
+*~
+.\#*
+*.bak
+*.tmp
+
+# compiled lisp
+*.fasl
+*.fas
+*.lib
+*.dfsl
+*.sbcl
