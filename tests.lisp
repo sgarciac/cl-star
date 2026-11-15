@@ -335,6 +335,100 @@ After the stream is closed the octets that were written are returned."
           (check (star-archive-pairs read-back) pairs))))))
 
 ;;; ---------------------------------------------------------------------------
+;;; Scenarios ported from the upstream interop vectors
+;;; https://tangled.org/microcosm.blue/star/tree/interop/interop
+;;;
+;;; Those vectors target STAR-lite v1, whose layout has no 0x01 pair marker
+;;; and no 0x00 end marker:
+;;;
+;;;   [ magic | len | meta ] [ len | key | len | val ] [ len | key | len | val ] ...
+;;;
+;;; while the current spec (https://dasl.ing/star.html) is
+;;;
+;;;   [ magic | len | meta ] [ 1 | len | key | len | val ] * [ 0 ]
+;;;
+;;; so the vectors cannot be fed to the reader as they are (every "valid" one
+;;; would be rejected). The interesting cases are reproduced below in the
+;;; current layout.
+;;; ---------------------------------------------------------------------------
+
+(deftest test-multi-byte-meta-length-prefix
+  ;; A meta of 200 bytes needs a two byte varint length prefix (C8 01).
+  (let* ((meta (make-array 200 :element-type '(unsigned-byte 8) :initial-element #x41))
+         (content (with-temp-archive (stream content)
+                    (let ((writer (make-star-writer stream)))
+                      (write-star-meta writer meta)
+                      (finish-star-writer writer)))))
+    (check (subseq content 0 6) (bytes #x2A #x6C #x01 #x00 #xC8 #x01))
+    (check (length content) 207)))
+
+(deftest test-multi-byte-key-length-prefix
+  ;; A key of 200 bytes needs a two byte varint length prefix (C8 01).
+  (let* ((key (make-array 200 :element-type '(unsigned-byte 8) :initial-element #x44))
+         (content (with-temp-archive (stream content)
+                    (let ((writer (make-star-writer stream)))
+                      (write-star-meta writer (bytes))
+                      (write-star-pair writer key (bytes))
+                      (finish-star-writer writer)))))
+    ;; magic | meta length | pair marker | key length | key | value length | end
+    (check (subseq content 0 8) (bytes #x2A #x6C #x01 #x00 #x00 #x01 #xC8 #x01))
+    (check (subseq content (- (length content) 3)) (bytes #x44 #x00 #x00))))
+
+(deftest test-multi-byte-value-length-prefix
+  ;; A value of 300 bytes needs a two byte varint length prefix (AC 02).
+  (let* ((value (make-array 300 :element-type '(unsigned-byte 8) :initial-element #x56))
+         (content (with-temp-archive (stream content)
+                    (let ((writer (make-star-writer stream)))
+                      (write-star-meta writer (bytes))
+                      (write-star-pair writer (bytes) value)
+                      (finish-star-writer writer)))))
+    ;; magic | meta length | pair marker | key length | value length | value | end
+    (check (subseq content 7 9) (bytes #xAC #x02))))
+
+(deftest test-nul-bytes-in-keys-and-values
+  ;; NUL bytes are allowed in keys and values.
+  (let* ((key (bytes #x00 #x41 #x00))
+         (value (bytes #x00 #x42))
+         (content (with-temp-archive (stream content)
+                    (let ((writer (make-star-writer stream)))
+                      (write-star-meta writer (bytes))
+                      (write-star-pair writer key value)
+                      (finish-star-writer writer)))))
+    (with-bytes-stream (input content)
+      (let* ((archive (read-star input))
+             (pair (first (star-archive-pairs archive))))
+        (check (car pair) key)
+        (check (cdr pair) value)))))
+
+(deftest test-non-sorted-keys-are-preserved
+  ;; The format is ordered, not sorted.
+  (let* ((pairs (list (cons (bytes #xFF) (bytes))
+                       (cons (bytes #xAA) (bytes))))
+         (content (with-temp-archive (stream content)
+                    (write-star stream (make-star-archive (bytes) pairs)))))
+    (with-bytes-stream (input content)
+      (let ((archive (read-star input)))
+        (check (mapcar #'car (star-archive-pairs archive))
+               (list (bytes #xFF) (bytes #xAA)))))))
+
+(deftest test-reader-rejects-non-minimal-key-length
+  ;; 0x81 0x00 encodes the key length 1 in a non minimal way.
+  (check-raises star-format-error
+    (with-bytes-stream (stream (bytes #x2A #x6C #x01 #x00 #x00 #x01 #x81 #x00 #x41 #x00))
+      (read-star stream))))
+
+(deftest test-reader-rejects-non-minimal-value-length
+  (check-raises star-format-error
+    (with-bytes-stream (stream (bytes #x2A #x6C #x01 #x00 #x00 #x01 #x01 #x41 #x81 #x00 #x42))
+      (read-star stream))))
+
+(deftest test-reader-rejects-meta-with-too-short-length
+  ;; The meta length prefix stops in the middle of the meta.
+  (check-raises star-format-error
+    (with-bytes-stream (stream (bytes #x2A #x6C #x01 #x00 #x07 #xA1 #x65 #x24 #x74 #x79 #x70 #x65))
+      (read-star stream))))
+
+;;; ---------------------------------------------------------------------------
 ;;; Runner
 ;;; ---------------------------------------------------------------------------
 

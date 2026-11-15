@@ -157,6 +157,34 @@ per key, 5 MiB per value and 5 MiB of metadata.
 (asdf:test-system :cl-star/tests)
 ```
 
+## Interop
+
+The upstream interop vectors live at
+<https://tangled.org/microcosm.blue/star/tree/interop/interop>. They target
+STAR-lite **v1**, whose layout has no `0x01` pair marker and no `0x00` end
+marker:
+
+```
+[ magic | len | meta ] [ len | key | len | val ] [ len | key | len | val ] ...
+```
+
+while this library implements the current specification
+(<https://dasl.ing/star.html>):
+
+```
+[ magic | len | meta ] [ 1 | len | key | len | val ] * [ 0 ]
+```
+
+so the vectors cannot be fed to the reader as they are: every "valid" one
+would be rejected. The interesting cases they cover (multi byte varint
+prefixes, non minimal and over long varints, empty and NUL bytes in keys and
+values, non sorted key order, truncated archives, trailing bytes) are
+reproduced in the current layout in `tests.lisp`.
+
+The remaining upstream vectors are DRISL level (a map metadata with a `$type`
+string, canonical DRISL encoding); `cl-star` handles the container only and
+leaves the metadata as opaque octets.
+
 ## License
 
 GPL 3.0
