@@ -178,14 +178,21 @@ All errors derive from `star-error`:
 Size limits can be configured per writer and per reader, they default to 8 KiB
 per key, 5 MiB per value and 5 MiB of metadata.
 
-## Interop
+## Tests
 
-The test suite runs the test vectors of the reference implementation
+The test suite lives in its own project,
+[cl-star-test](https://github.com/sgarciac/cl-star-test):
+
+```lisp
+(asdf:load-system :cl-star-test)
+(asdf:test-system :cl-star-test)
+```
+
+It runs the test vectors of the reference implementation
 (<https://tangled.org/bnewbold.net/cobalt/tree/main/star/testdata>), which are
 the interop vectors of
 <https://tangled.org/microcosm.blue/star/tree/interop/interop> updated to the
-layout of the current specification. They are vendored in `tests/fixtures/`
-and used by `tests/interop.lisp`:
+layout of the current specification:
 
 * 18 valid archives: they must parse, and their pairs and metadata must match
   the expectation;
@@ -193,7 +200,7 @@ and used by `tests/interop.lisp`:
   parser and 8 of them because of their metadata.
 
 The metadata of those archives is validated with `cl-atproto-drisl`, which the
-test system depends on weakly: when it is not installed, the metadata checks
+test project depends on weakly: when it is not installed, the metadata checks
 are skipped.
 
 The interop vectors of the `microcosm.blue/star` repository itself target
@@ -205,12 +212,6 @@ marker:
 ```
 
 so they cannot be fed to a reader implementing the current spec.
-
-## Tests
-
-```lisp
-(asdf:test-system :cl-star/tests)
-```
 
 ## License
 
